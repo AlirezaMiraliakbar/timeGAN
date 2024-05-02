@@ -29,15 +29,17 @@ if __name__ == "__main__":
     X, T, dataset = dataset_maker(data_name='stock', seq_len=seq_len)
     p = X.shape[2]
     # # TODO: Save the original data, modify the code first
-    # save_file(file=X.numpy(), file_format='pkl', file_name='f1_original', file_path=f'{project_filepath}/IC and OC data/original data/')
+    save_file(file=X.numpy(), file_format='pkl', file_name='original', file_path=f'{project_filepath}/data/')
     
-    # save_file(file=T.numpy(), file_format='pkl', file_name='T_f1', file_path=f'{project_filepath}/IC and OC data/original data/')
+    save_file(file=T.numpy(), file_format='pkl', file_name='T', file_path=f'{project_filepath}/data/')
 
     model_f = TimeGAN_trainer(device=device, dataset=dataset, max_seq_len=seq_len, p=p, project_filepath=project_filepath)
-
     
-    # print("\nGenerating Data...")
-    # generated_f1 = timegan_generator(model=model_f, fault_number=1, device=device, T=T, max_seq_len=max_seq_len, Z_dim=46, project_filepath=project_filepath)
+    torch.save(model_f, f'{project_filepath}/models/model.pth')
+    
+    print("\nGenerating Data...")
+    
+    generated_f1 = timegan_generator(model=model_f, device=device, T=T, max_seq_len=seq_len, Z_dim=p, project_filepath=project_filepath)
 
     # gen_data_unpadded = unpad_arrays(generated_f1,T)
     # ori_data_unpadded = unpad_arrays(X, T)
@@ -53,4 +55,4 @@ if __name__ == "__main__":
     #             noise_segment = np.random.normal(scale=std_segment, size=len(segments_ds[k]))
     #             segments_gen_ds[k] += noise_segment
     
-    # save_file(file=generated_f1, file_format='pkl', file_name=f'', file_path=f'{project_filepath}/IC and OC data/generated data/')
+    save_file(file=generated_f1, file_format='pkl', file_name=f'generated', file_path=f'{project_filepath}/data/')
