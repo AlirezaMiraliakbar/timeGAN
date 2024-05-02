@@ -2,6 +2,8 @@ import numpy as np
 import pandas as pd 
 import pickle 
 import os 
+import torch
+from torch.utils.data import TensorDataset
 #------------------------------------------------------------------------------------------------------------
 def normalizer(datalist):
     # Assuming your_data is a NumPy array of shape (n_timesteps, n_datastreams)
@@ -166,3 +168,82 @@ def unpad_arrays(padded_arrays, original_row_counts):
         unpadded_arrays.append(unpadded_array)
         
     return unpadded_arrays
+
+def MinMaxScaler(data):
+  """Min Max normalizer.
+  
+  Args:
+    - data: original data
+  
+  Returns:
+    - norm_data: normalized data
+  """
+  numerator = data - np.min(data, 0)
+  denominator = np.max(data, 0) - np.min(data, 0)
+  norm_data = numerator / (denominator + 1e-7)
+  return norm_data
+
+def real_data_loading (data_name, seq_len):
+  """Load and preprocess real-world datasets.
+  
+  Args:
+    - data_name: stock or energy
+    - seq_len: sequence length
+    
+  Returns:
+    - data: preprocessed data.
+  """  
+  assert data_name in ['stock','energy']
+  
+  if data_name == 'stock':
+    ori_data = np.loadtxt('data/stock_data.csv', delimiter = ",",skiprows = 1)
+  elif data_name == 'energy':
+    ori_data = np.loadtxt('data/energy_data.csv', delimiter = ",",skiprows = 1)
+        
+  # Flip the data to make chronological data
+  ori_data = ori_data[::-1]
+  # Normalize the data
+  ori_data = MinMaxScaler(ori_data)
+    
+  # Preprocess the dataset
+  temp_data = []    
+  # Cut data by sequence length
+  for i in range(0, len(ori_data) - seq_len):
+    _x = ori_data[i:i + seq_len]
+    temp_data.append(_x)
+        
+  # Mix the datasets (to make it similar to i.i.d)
+  idx = np.random.permutation(len(temp_data))    
+  data = []
+  for i in range(len(temp_data)):
+    data.append(temp_data[idx[i]])
+    
+  return data
+
+def dataset_maker(data_name, seq_len):
+    
+    # Loading data 
+
+    data = real_data_loading(data_name, seq_len)
+    
+
+    X = list()
+    T = list()
+
+    for i, sim_data in enumerate(data):
+            X.append(sim_data)
+            T.append(sim_data.shape[0])
+    # X is time series dataset as a PyTorch Tensor of shape [num_samples, seq_length, features]
+    # T is a list of timesteps for each sample
+
+    X = np.array(X)
+    X = torch.tensor(X, dtype=torch.float32)
+    T = torch.tensor(T, dtype=torch.int)
+
+    # Check the shape of the tensor 
+    print(f'Processing training data with shape {X.shape}')
+    
+    # Making a TorchDataset with X and T (models work with both)
+    dataset = TensorDataset(X,T) 
+
+    return X, T, dataset

@@ -1,17 +1,21 @@
-# -*- coding: UTF-8 -*-
+# Description: This file contains the implementation of the TimeGAN model using PyTorch. 
+# The TimeGAN model is a generative adversarial network (GAN) that is designed to generate synthetic time-series data that is similar 
+# to the original data. The model consists of an embedding network, generator network, discriminator network, recovery network, and supervisor network. 
+# The model is trained using a combination of adversarial loss, reconstruction loss, and supervised loss. The model can be used for various applications, 
+# such as generating synthetic data for anomaly detection, forecasting, and data augmentation.
 import torch
-import numpy as np
-
+import torch.nn as nn
+#-----------------------------------------------------------------------------------------------------------------------
 class EmbeddingNetwork(torch.nn.Module):
     """The embedding network (encoder) for TimeGAN
     """
-    def __init__(self, args):
+    def __init__(self, feature_dim, hidden_dim, num_layers, padding_value, max_seq_len):
         super(EmbeddingNetwork, self).__init__()
-        self.feature_dim = args.feature_dim
-        self.hidden_dim = args.hidden_dim
-        self.num_layers = args.num_layers
-        self.padding_value = args.padding_value
-        self.max_seq_len = args.max_seq_len
+        self.feature_dim = feature_dim
+        self.hidden_dim = hidden_dim
+        self.num_layers = num_layers
+        self.padding_value = padding_value
+        self.max_seq_len = max_seq_len
 
         # Embedder Architecture
         self.emb_rnn = torch.nn.GRU(
@@ -77,17 +81,163 @@ class EmbeddingNetwork(torch.nn.Module):
         # 128 x 100 x H
         H = self.emb_sigmoid(logits)
         return H
+# ------------------------------------------- Generator Model -----------------------------------------------------------
+class GeneratorNetwork(torch.nn.Module):
+    """The generator network (encoder) for TimeGAN
+    """
+    def __init__(self, Z_dim, hidden_dim, num_layers, padding_value, max_seq_len):
+        super(GeneratorNetwork, self).__init__()
+        self.Z_dim = Z_dim
+        self.hidden_dim = hidden_dim
+        self.num_layers = num_layers
+        self.padding_value = padding_value
+        self.max_seq_len = max_seq_len
 
+        # Generator Architecture
+        self.gen_rnn = torch.nn.GRU(
+            input_size=self.Z_dim, 
+            hidden_size=self.hidden_dim, 
+            num_layers=self.num_layers, 
+            batch_first=True
+        )
+        self.gen_linear = torch.nn.Linear(self.hidden_dim, self.hidden_dim)
+        self.gen_sigmoid = torch.nn.Sigmoid()
+
+        # Init weights
+        # Default weights of TensorFlow is Xavier Uniform for W and 1 or 0 for b
+        # Reference: 
+        # - https://www.tensorflow.org/api_docs/python/tf/compat/v1/get_variable
+        # - https://github.com/tensorflow/tensorflow/blob/v2.3.1/tensorflow/python/keras/layers/legacy_rnn/rnn_cell_impl.py#L484-L614
+        with torch.no_grad():
+            for name, param in self.gen_rnn.named_parameters():
+                if 'weight_ih' in name:
+                    torch.nn.init.xavier_uniform_(param.data)
+                elif 'weight_hh' in name:
+                    torch.nn.init.xavier_uniform_(param.data)
+                elif 'bias_ih' in name:
+                    param.data.fill_(1)
+                elif 'bias_hh' in name:
+                    param.data.fill_(0)
+            for name, param in self.gen_linear.named_parameters():
+                if 'weight' in name:
+                    torch.nn.init.xavier_uniform_(param)
+                elif 'bias' in name:
+                    param.data.fill_(0)
+
+    def forward(self, Z, T):
+        """Takes in random noise (features) and generates synthetic features within the latent space
+        Args:
+            - Z: input random noise (B x S x Z)
+            - T: input temporal information
+        Returns:
+            - H: embeddings (B x S x E)
+        """
+        # Dynamic RNN input for ignoring paddings
+        Z_packed = torch.nn.utils.rnn.pack_padded_sequence(
+            input=Z, 
+            lengths=T, 
+            batch_first=True, 
+            enforce_sorted=False
+        )
+        
+        # B x S x H
+        H_o, H_t = self.gen_rnn(Z_packed)
+        
+        # Pad RNN output back to sequence length
+        H_o, T = torch.nn.utils.rnn.pad_packed_sequence(
+            sequence=H_o, 
+            batch_first=True,
+            padding_value=self.padding_value,
+            total_length=self.max_seq_len
+        )
+
+        # B x S x H
+        logits = self.gen_linear(H_o)
+        # B x S
+        H = self.gen_sigmoid(logits)
+        return H
+# ------------------------------------------- Discriminator Model -------------------------------------------------------
+class DiscriminatorNetwork(torch.nn.Module):
+    """The Discriminator network (decoder) for TimeGAN
+    """
+    def __init__(self, hidden_dim, num_layers, padding_value, max_seq_len):
+        super(DiscriminatorNetwork, self).__init__()
+        self.hidden_dim = hidden_dim
+        self.num_layers = num_layers
+        self.padding_value = padding_value
+        self.max_seq_len = max_seq_len
+
+        # Discriminator Architecture
+        self.dis_rnn = torch.nn.GRU(
+            input_size=self.hidden_dim, 
+            hidden_size=self.hidden_dim, 
+            num_layers=self.num_layers, 
+            batch_first=True
+        )
+        self.dis_linear = torch.nn.Linear(self.hidden_dim, 1)
+
+        # Init weights
+        # Default weights of TensorFlow is Xavier Uniform for W and 1 or 0 for b
+        # Reference: 
+        # - https://www.tensorflow.org/api_docs/python/tf/compat/v1/get_variable
+        # - https://github.com/tensorflow/tensorflow/blob/v2.3.1/tensorflow/python/keras/layers/legacy_rnn/rnn_cell_impl.py#L484-L614
+        with torch.no_grad():
+            for name, param in self.dis_rnn.named_parameters():
+                if 'weight_ih' in name:
+                    torch.nn.init.xavier_uniform_(param.data)
+                elif 'weight_hh' in name:
+                    torch.nn.init.xavier_uniform_(param.data)
+                elif 'bias_ih' in name:
+                    param.data.fill_(1)
+                elif 'bias_hh' in name:
+                    param.data.fill_(0)
+            for name, param in self.dis_linear.named_parameters():
+                if 'weight' in name:
+                    torch.nn.init.xavier_uniform_(param)
+                elif 'bias' in name:
+                    param.data.fill_(0)
+
+    def forward(self, H, T):
+        """Forward pass for predicting if the data is real or synthetic
+        Args:
+            - H: latent representation (B x S x E)
+            - T: input temporal information
+        Returns:
+            - logits: predicted logits (B x S x 1)
+        """
+        # Dynamic RNN input for ignoring paddings
+        H_packed = torch.nn.utils.rnn.pack_padded_sequence(
+            input=H, 
+            lengths=T, 
+            batch_first=True, 
+            enforce_sorted=False
+        )
+        
+        # 128 x 100 x 10
+        H_o, H_t = self.dis_rnn(H_packed)
+        
+        # Pad RNN output back to sequence length
+        H_o, T = torch.nn.utils.rnn.pad_packed_sequence(
+            sequence=H_o, 
+            batch_first=True,
+            padding_value=self.padding_value,
+            total_length=self.max_seq_len
+        )
+
+        # 128 x 100
+        logits = self.dis_linear(H_o).squeeze(-1)
+        return logits
+# -------------------------------------------- Recovery Model -----------------------------------------------------------
 class RecoveryNetwork(torch.nn.Module):
     """The recovery network (decoder) for TimeGAN
     """
-    def __init__(self, args):
+    def __init__(self, hidden_dim, feature_dim, num_layers, padding_value, max_seq_len):
         super(RecoveryNetwork, self).__init__()
-        self.hidden_dim = args.hidden_dim
-        self.feature_dim = args.feature_dim
-        self.num_layers = args.num_layers
-        self.padding_value = args.padding_value
-        self.max_seq_len = args.max_seq_len
+        self.hidden_dim = hidden_dim
+        self.feature_dim = feature_dim
+        self.num_layers = num_layers
+        self.padding_value = padding_value
+        self.max_seq_len = max_seq_len
 
         # Recovery Architecture
         self.rec_rnn = torch.nn.GRU(
@@ -149,16 +299,16 @@ class RecoveryNetwork(torch.nn.Module):
         # 128 x 100 x 71
         X_tilde = self.rec_linear(H_o)
         return X_tilde
-
+# ------------------------------------------- Supervisor Model ----------------------------------------------------------
 class SupervisorNetwork(torch.nn.Module):
     """The Supervisor network (decoder) for TimeGAN
     """
-    def __init__(self, args):
+    def __init__(self, hidden_dim, num_layers, padding_value, max_seq_len):
         super(SupervisorNetwork, self).__init__()
-        self.hidden_dim = args.hidden_dim
-        self.num_layers = args.num_layers
-        self.padding_value = args.padding_value
-        self.max_seq_len = args.max_seq_len
+        self.hidden_dim = hidden_dim
+        self.num_layers = num_layers
+        self.padding_value = padding_value
+        self.max_seq_len = max_seq_len
 
         # Supervisor Architecture
         self.sup_rnn = torch.nn.GRU(
@@ -223,173 +373,32 @@ class SupervisorNetwork(torch.nn.Module):
         # 128 x 100 x 10
         H_hat = self.sup_sigmoid(logits)
         return H_hat
-
-class GeneratorNetwork(torch.nn.Module):
-    """The generator network (encoder) for TimeGAN
-    """
-    def __init__(self, args):
-        super(GeneratorNetwork, self).__init__()
-        self.Z_dim = args.Z_dim
-        self.hidden_dim = args.hidden_dim
-        self.num_layers = args.num_layers
-        self.padding_value = args.padding_value
-        self.max_seq_len = args.max_seq_len
-
-        # Generator Architecture
-        self.gen_rnn = torch.nn.GRU(
-            input_size=self.Z_dim, 
-            hidden_size=self.hidden_dim, 
-            num_layers=self.num_layers, 
-            batch_first=True
-        )
-        self.gen_linear = torch.nn.Linear(self.hidden_dim, self.hidden_dim)
-        self.gen_sigmoid = torch.nn.Sigmoid()
-
-        # Init weights
-        # Default weights of TensorFlow is Xavier Uniform for W and 1 or 0 for b
-        # Reference: 
-        # - https://www.tensorflow.org/api_docs/python/tf/compat/v1/get_variable
-        # - https://github.com/tensorflow/tensorflow/blob/v2.3.1/tensorflow/python/keras/layers/legacy_rnn/rnn_cell_impl.py#L484-L614
-        with torch.no_grad():
-            for name, param in self.gen_rnn.named_parameters():
-                if 'weight_ih' in name:
-                    torch.nn.init.xavier_uniform_(param.data)
-                elif 'weight_hh' in name:
-                    torch.nn.init.xavier_uniform_(param.data)
-                elif 'bias_ih' in name:
-                    param.data.fill_(1)
-                elif 'bias_hh' in name:
-                    param.data.fill_(0)
-            for name, param in self.gen_linear.named_parameters():
-                if 'weight' in name:
-                    torch.nn.init.xavier_uniform_(param)
-                elif 'bias' in name:
-                    param.data.fill_(0)
-
-    def forward(self, Z, T):
-        """Takes in random noise (features) and generates synthetic features within the latent space
-        Args:
-            - Z: input random noise (B x S x Z)
-            - T: input temporal information
-        Returns:
-            - H: embeddings (B x S x E)
-        """
-        # Dynamic RNN input for ignoring paddings
-        Z_packed = torch.nn.utils.rnn.pack_padded_sequence(
-            input=Z, 
-            lengths=T, 
-            batch_first=True, 
-            enforce_sorted=False
-        )
-        
-        # 128 x 100 x 71
-        H_o, H_t = self.gen_rnn(Z_packed)
-        
-        # Pad RNN output back to sequence length
-        H_o, T = torch.nn.utils.rnn.pad_packed_sequence(
-            sequence=H_o, 
-            batch_first=True,
-            padding_value=self.padding_value,
-            total_length=self.max_seq_len
-        )
-
-        # 128 x 100 x 10
-        logits = self.gen_linear(H_o)
-        # B x S
-        H = self.gen_sigmoid(logits)
-        return H
-
-class DiscriminatorNetwork(torch.nn.Module):
-    """The Discriminator network (decoder) for TimeGAN
-    """
-    def __init__(self, args):
-        super(DiscriminatorNetwork, self).__init__()
-        self.hidden_dim = args.hidden_dim
-        self.num_layers = args.num_layers
-        self.padding_value = args.padding_value
-        self.max_seq_len = args.max_seq_len
-
-        # Discriminator Architecture
-        self.dis_rnn = torch.nn.GRU(
-            input_size=self.hidden_dim, 
-            hidden_size=self.hidden_dim, 
-            num_layers=self.num_layers, 
-            batch_first=True
-        )
-        self.dis_linear = torch.nn.Linear(self.hidden_dim, 1)
-
-        # Init weights
-        # Default weights of TensorFlow is Xavier Uniform for W and 1 or 0 for b
-        # Reference: 
-        # - https://www.tensorflow.org/api_docs/python/tf/compat/v1/get_variable
-        # - https://github.com/tensorflow/tensorflow/blob/v2.3.1/tensorflow/python/keras/layers/legacy_rnn/rnn_cell_impl.py#L484-L614
-        with torch.no_grad():
-            for name, param in self.dis_rnn.named_parameters():
-                if 'weight_ih' in name:
-                    torch.nn.init.xavier_uniform_(param.data)
-                elif 'weight_hh' in name:
-                    torch.nn.init.xavier_uniform_(param.data)
-                elif 'bias_ih' in name:
-                    param.data.fill_(1)
-                elif 'bias_hh' in name:
-                    param.data.fill_(0)
-            for name, param in self.dis_linear.named_parameters():
-                if 'weight' in name:
-                    torch.nn.init.xavier_uniform_(param)
-                elif 'bias' in name:
-                    param.data.fill_(0)
-
-    def forward(self, H, T):
-        """Forward pass for predicting if the data is real or synthetic
-        Args:
-            - H: latent representation (B x S x E)
-            - T: input temporal information
-        Returns:
-            - logits: predicted logits (B x S x 1)
-        """
-        # Dynamic RNN input for ignoring paddings
-        H_packed = torch.nn.utils.rnn.pack_padded_sequence(
-            input=H, 
-            lengths=T, 
-            batch_first=True, 
-            enforce_sorted=False
-        )
-        
-        # 128 x 100 x 10
-        H_o, H_t = self.dis_rnn(H_packed)
-        
-        # Pad RNN output back to sequence length
-        H_o, T = torch.nn.utils.rnn.pad_packed_sequence(
-            sequence=H_o, 
-            batch_first=True,
-            padding_value=self.padding_value,
-            total_length=self.max_seq_len
-        )
-
-        # 128 x 100
-        logits = self.dis_linear(H_o).squeeze(-1)
-        return logits
-
+# -----------------------------------------==-- TimeGAN Model -----------------------------------------------------------
 class TimeGAN(torch.nn.Module):
     """Implementation of TimeGAN (Yoon et al., 2019) using PyTorch
     Reference:
     - https://papers.nips.cc/paper/2019/hash/c9efe5f26cd17ba6216bbe2a7d26d490-Abstract.html
     - https://github.com/jsyoon0823/TimeGAN
     """
-    def __init__(self, args):
+    def __init__(self, device, feature_dim, Z_dim, hidden_dim, max_seq_len, batch_size, num_layers, padding_value):
         super(TimeGAN, self).__init__()
-        self.device = args.device
-        self.feature_dim = args.feature_dim
-        self.Z_dim = args.Z_dim
-        self.hidden_dim = args.hidden_dim
-        self.max_seq_len = args.max_seq_len
-        self.batch_size = args.batch_size
 
-        self.embedder = EmbeddingNetwork(args)
-        self.recovery = RecoveryNetwork(args)
-        self.generator = GeneratorNetwork(args)
-        self.supervisor = SupervisorNetwork(args)
-        self.discriminator = DiscriminatorNetwork(args)
+        # Parameter initialization
+        self.device = device
+        self.feature_dim = feature_dim
+        self.Z_dim = Z_dim
+        self.hidden_dim = hidden_dim
+        self.max_seq_len = max_seq_len
+        self.batch_size = batch_size
+        self.num_layers = num_layers
+        self.padding_value = padding_value
+
+        # Model initialization
+        self.embedder = EmbeddingNetwork(self.feature_dim, self.hidden_dim, self.num_layers, self.padding_value, self.max_seq_len)
+        self.generator = GeneratorNetwork(self.Z_dim, self.hidden_dim, self.num_layers, self.padding_value, self.max_seq_len)
+        self.discriminator = DiscriminatorNetwork(self.hidden_dim, self.num_layers, self.padding_value, self.max_seq_len)
+        self.recovery = RecoveryNetwork(self.hidden_dim, self.feature_dim, self.num_layers, self.padding_value, self.max_seq_len ) 
+        self.supervisor = SupervisorNetwork(self.hidden_dim, self.num_layers, self.padding_value, self.max_seq_len)
 
     def _recovery_forward(self, X, T):
         """The embedding network forward pass and the embedder network loss
@@ -576,3 +585,4 @@ class TimeGAN(torch.nn.Module):
         else: raise ValueError("`obj` should be either `autoencoder`, `supervisor`, `generator`, or `discriminator`")
 
         return loss
+# --------------------------------------------- END OF MODELS -----------------------------------------------------------
