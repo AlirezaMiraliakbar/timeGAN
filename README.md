@@ -6,6 +6,6 @@ Original paper codebase: https://github.com/jsyoon0823/TimeGAN
 
 (1) diversity:
 
-![timePCA](path/to/timePCA.png)
+![timePCA](./timePCA.png)
 
-![covariancePCA](path/to/covariancePCA.png)
+![covariancePCA](./covariancePCA.png)
