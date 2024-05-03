@@ -5,7 +5,7 @@ The TimeGAN model presented by Yoon et al. (2019) is tested on the Google stocks
 Original paper codebase: https://github.com/jsyoon0823/TimeGAN
 
 (1) diversity:
-
+- Timeseries PCA
 ![timePCA](./timePCA.png)
-
+- Mapped covarianve PCA
 ![covariancePCA](./covariancePCA.png)
